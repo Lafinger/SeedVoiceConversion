@@ -1,5 +1,6 @@
-import argparse
+﻿import argparse
 import os
+import threading
 import tempfile
 import uuid
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru_settings import TraceID, logger, setup_logging
 
-from voice_conversion_service import VoiceConversionService
+from voice_conversion_service import ConversionCancelled, VoiceConversionService
 
 voice_service = VoiceConversionService()
 
@@ -59,11 +60,11 @@ async def request_middleware(request: Request, call_next):
         pass
 
 
-async def disconnected(request: Request, cancel_scope: anyio.CancelScope) -> None:
+async def disconnected(request: Request, cancel_event: threading.Event) -> None:
     while True:
         message = await request.receive()
         if message["type"] == "http.disconnect":
-            cancel_scope.cancel()
+            cancel_event.set()
             break
 
 
@@ -104,10 +105,18 @@ async def voice_conversion_endpoint(
     """
     提供声音转换能力的路由，返回生成的 wav 文件。
     """
+    
+    # 检查全局信号量是否被占用
+    if global_semaphore.value == 0:
+        logger.error("global semaphore locked, request rejected")
+        raise HTTPException(status_code=499, detail="连接断开任务已取消")
+    else:
+        await global_semaphore.acquire()
 
     logger.info("conversion initialization")
     source_path = await _temp_save_upload_file(source_audio)
     reference_path = await _temp_save_upload_file(reference_audio)
+    cancel_event = threading.Event()
 
     try:
         logger.info("conversion task creation")
@@ -115,22 +124,25 @@ async def voice_conversion_endpoint(
         # 用 anyio 的 TaskGroup + CancelScope
         async with anyio.create_task_group() as tg:
             # 开一个“监听断连”的协程，断开时会调用 tg.cancel_scope.cancel()
-            tg.start_soon(disconnected, request, tg.cancel_scope)
+            tg.start_soon(disconnected, request, cancel_event)
 
             # 在同一个 cancel_scope 里，把同步的 convert 丢到线程执行
             output_path = await anyio.to_thread.run_sync(
-            lambda: voice_service.convert(
-                source_path=source_path,
-                reference_path=reference_path,
-                diffusion_steps=diffusion_steps,
-                length_adjust=length_adjust,
-                inference_cfg_rate=inference_cfg_rate,
-                auto_f0_adjust=auto_f0_adjust,
-                pitch_shift=pitch_shift,
+                lambda: voice_service.convert(
+                    source_path=source_path,
+                    reference_path=reference_path,
+                    diffusion_steps=diffusion_steps,
+                    length_adjust=length_adjust,
+                    inference_cfg_rate=inference_cfg_rate,
+                    auto_f0_adjust=auto_f0_adjust,
+                    pitch_shift=pitch_shift,
+                    cancel_event=cancel_event,
+                ),
+                cancellable=False,
             )
-        )
+            tg.cancel_scope.cancel()
 
-            logger.info("conversion completed")
+        logger.info("conversion completed")
 
         # 走到这里，说明既没有异常也没有被取消
         return FileResponse(
@@ -140,20 +152,25 @@ async def voice_conversion_endpoint(
         )
 
     # anyio 的取消异常（兼容 Trio/asyncio）
+    except ConversionCancelled:
+        logger.error("conversion cancelled by client")
+        raise HTTPException(status_code=499, detail="连接断开任务已取消")
     except anyio.get_cancelled_exc_class():
         logger.error("client cancel connection")
         raise HTTPException(status_code=499, detail="连接断开任务已取消")
 
+
     except AssertionError as e:
-        logger.exception(e)
+        logger.error(e)
         raise HTTPException(status_code=501, detail="参数验证失败")
 
     except Exception as e:
-        logger.exception("conversion failed: %s", e)
+        logger.error("conversion failed: %s", e)
         raise HTTPException(status_code=500, detail="声音转换失败")
 
     finally:
         global_semaphore.release()
+        cancel_event.clear()
 
         # 清理临时文件
         for tmp in (source_path, reference_path):

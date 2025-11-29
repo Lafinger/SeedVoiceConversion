@@ -1,5 +1,6 @@
 ﻿import os
 import socket
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Tuple
@@ -21,6 +22,9 @@ from modules.rmvpe import RMVPE
 
 # 默认半精度推理，老显卡修改为: torch.float32
 dtype = torch.float16
+
+class ConversionCancelled(Exception):
+    """转换被取消时抛出的异常。"""
 
 # 使用本地缓存模型
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -299,6 +303,7 @@ def voice_conversion(
     inference_cfg_rate: float,
     auto_f0_adjust: bool,
     pitch_shift: int,
+    cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[int, np.ndarray]:
     """
     执行一次端到端的声音转换流程，将源语音的内容迁移到参考音色上。
@@ -315,6 +320,11 @@ def voice_conversion(
     返回:
         采样率与最终合成的波形数组。
     """
+    def _check_cancel():
+        if cancel_event is not None and cancel_event.is_set():
+            raise ConversionCancelled("conversion cancelled")
+
+    _check_cancel()
     inference_module = model_f0
     # 读取源音频与参考音频，并统一采样率
     source_audio = librosa.load(source, sr=sr)[0]
@@ -430,9 +440,11 @@ def voice_conversion(
     processed_frames = 0
     generated_wave_chunks = []
     previous_chunk = None
+    _check_cancel()
 
     # 采用滑动窗口形式迭代生成目标mel，再交由声码器合成波形
     while processed_frames < cond.size(1):
+        _check_cancel()
         # 当前窗口的语义条件，并判断是否已到末尾
         chunk_cond = cond[:, processed_frames : processed_frames + max_source_window]
         is_last_chunk = processed_frames + max_source_window >= cond.size(1)

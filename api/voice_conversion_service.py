@@ -7,7 +7,7 @@ import numpy as np
 from loguru import logger
 from scipy.io.wavfile import write as wav_write
 
-from seed_conversion import initialize_models, voice_conversion
+from seed_conversion import ConversionCancelled, initialize_models, voice_conversion
 
 
 class VoiceConversionService:
@@ -41,6 +41,7 @@ class VoiceConversionService:
         inference_cfg_rate: float = 0.7,
         auto_f0_adjust: bool = True,
         pitch_shift: int = 0,
+        cancel_event: Optional[threading.Event] = None,
         output_dir: Path = Path("../outputs"),
         output_filename: Optional[str] = None,
     ) -> Path:
@@ -61,11 +62,17 @@ class VoiceConversionService:
         返回:
             输出 wav 文件的完整路径。
         """
+        def _check_cancel():
+            if cancel_event is not None and cancel_event.is_set():
+                raise ConversionCancelled("conversion cancelled")
+
+        _check_cancel()
         if not source_path.exists():
             raise FileNotFoundError(f"未找到源音频文件: {source_path}")
         if not reference_path.exists():
             raise FileNotFoundError(f"未找到参考音频文件: {reference_path}")
 
+        _check_cancel()
         output_dir.mkdir(parents=True, exist_ok=True)
         if not output_filename:
             output_filename = f"voice_conversion_{uuid.uuid4().hex}.wav"
@@ -82,7 +89,9 @@ class VoiceConversionService:
             pitch_shift,
         )
 
+        _check_cancel()
         with self._lock:
+            _check_cancel()
             sample_rate, waveform = voice_conversion(
                 source=str(source_path),
                 target=str(reference_path),
@@ -91,8 +100,10 @@ class VoiceConversionService:
                 inference_cfg_rate=inference_cfg_rate,
                 auto_f0_adjust=auto_f0_adjust,
                 pitch_shift=pitch_shift,
+                cancel_event=cancel_event,
             )
 
+        _check_cancel()
         waveform_int16 = (np.clip(waveform, -1.0, 1.0) * 32767).astype(np.int16)
         wav_write(str(output_path), sample_rate, waveform_int16)
         logger.info("声音转换完成，结果保存为 %s", output_path)
