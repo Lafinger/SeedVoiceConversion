@@ -83,6 +83,7 @@ async def _temp_save_upload_file(upload: UploadFile) -> Path:
     response_class=FileResponse,
 )
 async def voice_conversion_endpoint(
+    request: Request,
     source_audio: UploadFile = File(..., description="待转换的源音频文件"),
     reference_audio: UploadFile = File(..., description="参考音色音频文件"),
     diffusion_steps: Annotated[int, Form(description="扩散步数", ge=1, le=100)] = 10,
@@ -92,21 +93,20 @@ async def voice_conversion_endpoint(
     ] = 0.7,
     auto_f0_adjust: Annotated[bool, Form(description="是否自动对齐音高中位数")] = True,
     pitch_shift: Annotated[int, Form(description="手动升降调，单位半音", ge=-12, le=12)] = 0,
-) -> Optional[FileResponse]:
+) -> FileResponse:
     """
     提供声音转换能力的路由，返回生成的 wav 文件。
     """
 
-    logger.info("init conversion")
+    logger.info("conversion initialization")
     source_path = await _temp_save_upload_file(source_audio)
     reference_path = await _temp_save_upload_file(reference_audio)
 
     # 初始化为None，防止在异常时未定义
     conversion_task = None
-    # 转换停止事件
-    stop_event = asyncio.Event()
     try:
-        logger.info("start conversion")
+        # 启动转换任务
+        logger.info("conversion task creation")
         conversion_task = asyncio.create_task(asyncio.to_thread(
             voice_service.convert,
             source_path=source_path,
@@ -118,11 +118,26 @@ async def voice_conversion_endpoint(
             pitch_shift=pitch_shift,
         ))
 
+        # 处理进度消息直到转换完成
+        while not conversion_task.done() and not conversion_task.cancelled():
+            await asyncio.wait(
+                [conversion_task],  # 等待进度事件或任务完成
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=1
+            )
+            if await request.is_disconnected():
+                logger.error("client cancel connection")
+                raise asyncio.CancelledError("客户端断开连接")
+            logger.info("Progress...")
+
         if conversion_task.cancelled():
             logger.error("conversion task cancelled")
             raise HTTPException(status_code=400, detail="转换任务已被取消")
 
         output_path = await conversion_task
+
+        logger.info("conversion completed")
+
         return FileResponse(
             path=output_path,
             media_type="audio/wav",
@@ -134,12 +149,11 @@ async def voice_conversion_endpoint(
         raise HTTPException(status_code=500, detail="参数验证失败")
 
     except asyncio.CancelledError as e:
-        stop_event.set()
         logger.error("client cancel connection")
         raise HTTPException(status_code=500, detail="连接断开任务已取消")
 
-    except Exception as exc:
-        logger.exception("conversion failed: %s", exc)
+    except Exception as e:
+        logger.exception("conversion failed: %s", e)
         raise HTTPException(status_code=500, detail="声音转换失败")
 
     finally:
