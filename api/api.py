@@ -3,9 +3,9 @@ import os
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Awaitable, Any
 
-import asyncio
+import anyio
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -13,9 +13,10 @@ from loguru_settings import TraceID, logger, setup_logging
 
 from voice_conversion_service import VoiceConversionService
 
+voice_service = VoiceConversionService()
 
 # 使用全局信号量进行限流检测
-global_semaphore = asyncio.Semaphore(1)
+global_semaphore = anyio.Semaphore(1)
 
 app = FastAPI(
     title="Seed Voice Conversion Service",
@@ -35,8 +36,6 @@ app.add_middleware(
     expose_headers=["*"],  # 暴露所有请求头， 如：["Content-Type", "Authorization", "X-Request-Id"]
     max_age=600, # 预检请求（OPTIONS）结果的缓存时间（秒）, 减少OPTIONS请求频率，提高性能
 )
-
-voice_service = VoiceConversionService()
 
 
 @app.middleware("http")
@@ -58,6 +57,14 @@ async def request_middleware(request: Request, call_next):
         return JSONResponse(content={"success": False}, status_code=500)
     finally:
         pass
+
+
+async def disconnected(request: Request, cancel_scope: anyio.CancelScope) -> None:
+    while True:
+        message = await request.receive()
+        if message["type"] == "http.disconnect":
+            cancel_scope.cancel()
+            break
 
 
 async def _temp_save_upload_file(upload: UploadFile) -> Path:
@@ -102,63 +109,50 @@ async def voice_conversion_endpoint(
     source_path = await _temp_save_upload_file(source_audio)
     reference_path = await _temp_save_upload_file(reference_audio)
 
-    # 初始化为None，防止在异常时未定义
-    conversion_task = None
     try:
-        # 启动转换任务
         logger.info("conversion task creation")
-        conversion_task = asyncio.create_task(asyncio.to_thread(
-            voice_service.convert,
-            source_path=source_path,
-            reference_path=reference_path,
-            diffusion_steps=diffusion_steps,
-            length_adjust=length_adjust,
-            inference_cfg_rate=inference_cfg_rate,
-            auto_f0_adjust=auto_f0_adjust,
-            pitch_shift=pitch_shift,
-        ))
 
-        # 处理进度消息直到转换完成
-        while not conversion_task.done() and not conversion_task.cancelled():
-            await asyncio.wait(
-                [conversion_task],  # 等待进度事件或任务完成
-                return_when=asyncio.FIRST_COMPLETED,
-                timeout=1
+        # 用 anyio 的 TaskGroup + CancelScope
+        async with anyio.create_task_group() as tg:
+            # 开一个“监听断连”的协程，断开时会调用 tg.cancel_scope.cancel()
+            tg.start_soon(disconnected, request, tg.cancel_scope)
+
+            # 在同一个 cancel_scope 里，把同步的 convert 丢到线程执行
+            output_path = await anyio.to_thread.run_sync(
+            lambda: voice_service.convert(
+                source_path=source_path,
+                reference_path=reference_path,
+                diffusion_steps=diffusion_steps,
+                length_adjust=length_adjust,
+                inference_cfg_rate=inference_cfg_rate,
+                auto_f0_adjust=auto_f0_adjust,
+                pitch_shift=pitch_shift,
             )
-            if await request.is_disconnected():
-                logger.error("client cancel connection")
-                raise asyncio.CancelledError("客户端断开连接")
-            logger.info("Progress...")
+        )
 
-        if conversion_task.cancelled():
-            logger.error("conversion task cancelled")
-            raise HTTPException(status_code=400, detail="转换任务已被取消")
+            logger.info("conversion completed")
 
-        output_path = await conversion_task
-
-        logger.info("conversion completed")
-
+        # 走到这里，说明既没有异常也没有被取消
         return FileResponse(
             path=output_path,
             media_type="audio/wav",
             filename=output_path.name,
         )
 
+    # anyio 的取消异常（兼容 Trio/asyncio）
+    except anyio.get_cancelled_exc_class():
+        logger.error("client cancel connection")
+        raise HTTPException(status_code=499, detail="连接断开任务已取消")
+
     except AssertionError as e:
         logger.exception(e)
-        raise HTTPException(status_code=500, detail="参数验证失败")
-
-    except asyncio.CancelledError as e:
-        logger.error("client cancel connection")
-        raise HTTPException(status_code=500, detail="连接断开任务已取消")
+        raise HTTPException(status_code=501, detail="参数验证失败")
 
     except Exception as e:
         logger.exception("conversion failed: %s", e)
         raise HTTPException(status_code=500, detail="声音转换失败")
 
     finally:
-        if conversion_task is not None and not conversion_task.done():
-            conversion_task.cancel()
         global_semaphore.release()
 
         # 清理临时文件
