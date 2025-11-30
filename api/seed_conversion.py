@@ -12,19 +12,22 @@ import torchaudio
 import yaml
 from scipy.io.wavfile import write as wav_write
 
-from hf_utils import load_custom_model_from_hf
-from modules.audio import mel_spectrogram
-from modules.campplus.DTDNN import CAMPPlus
-from modules.commons import build_model, load_checkpoint, recursive_munch
-from modules.hifigan.f0_predictor import ConvRNNF0Predictor
-from modules.hifigan.generator import HiFTGenerator
-from modules.rmvpe import RMVPE
+
+from api.modules.audio import mel_spectrogram
+from api.modules.campplus.DTDNN import CAMPPlus
+from api.modules.commons import build_model, load_checkpoint, recursive_munch
+from api.modules.hifigan.f0_predictor import ConvRNNF0Predictor
+from api.modules.hifigan.generator import HiFTGenerator
+from api.modules.rmvpe import RMVPE
+
+from api.hf_utils import load_custom_model_from_hf
+from api.common_exceptions import ConversionCancelled
+
 
 # 默认半精度推理，老显卡修改为: torch.float32
 dtype = torch.float16
 
-class ConversionCancelled(Exception):
-    """转换被取消时抛出的异常。"""
+
 
 # 使用本地缓存模型
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
@@ -106,7 +109,7 @@ def load_models(args) -> Tuple:
     # 声码器负责将Mel或特征映射回波形，不同类型初始化方式不同
     vocoder_type = model_params.vocoder.type
     if vocoder_type == "bigvgan":
-        from modules.bigvgan import bigvgan
+        from api.modules.bigvgan import bigvgan
 
         # BigVGAN 直接载入官方提供的预训练权重
         bigvgan_name = model_params.vocoder.name
@@ -460,6 +463,7 @@ def voice_conversion(
                 None,
                 diffusion_steps,
                 inference_cfg_rate=inference_cfg_rate,
+                cancel_event=cancel_event,
             )
             vc_target = vc_target[:, :, mel2.size(-1) :]
         # 将预测的mel片段送入声码器得到波形

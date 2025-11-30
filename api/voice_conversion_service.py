@@ -7,7 +7,8 @@ import numpy as np
 from loguru import logger
 from scipy.io.wavfile import write as wav_write
 
-from seed_conversion import ConversionCancelled, initialize_models, voice_conversion
+from api.common_exceptions import ConversionCancelled
+from api.seed_conversion import initialize_models, voice_conversion
 
 
 class VoiceConversionService:

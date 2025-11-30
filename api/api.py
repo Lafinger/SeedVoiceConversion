@@ -12,8 +12,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru_settings import TraceID, logger, setup_logging
 
-from music_utils import merge_accompaniment_and_vocals
-from voice_conversion_service import ConversionCancelled, VoiceConversionService
+from api.music_utils import merge_accompaniment_and_vocals
+from api.common_exceptions import ConversionCancelled
+from api.voice_conversion_service import VoiceConversionService
 
 BASE_DIR = Path(__file__).resolve().parent
 UVICORN_LOG_CONFIG = BASE_DIR / "uvicorn_config.json"

@@ -17,5 +17,5 @@ if not exist "%ROOT_DIR%api\api.py" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" .\api\api.py
+"%PYTHON_EXE%" -m api.api
 pause
