@@ -1,5 +1,6 @@
 # Custom
 outputs/
+py312/
 
 # Pycharm
 .idea
