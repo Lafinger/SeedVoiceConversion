@@ -11,6 +11,8 @@ ENV LD_LIBRARY_PATH="/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cu
 # ENV HF_HUB_ENABLE_HF_TRANSFER=1
 ENV HF_ENDPOINT=https://hf-mirror.com
 
+# # 设置pip源
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 安装Python和基本工具
 RUN apt-get update && apt-get install -y \
@@ -19,9 +21,6 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# 设置pip源
-RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 升级pip工具
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
