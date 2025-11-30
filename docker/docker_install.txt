@@ -1,5 +1,5 @@
 # 导出基础镜像
-docker load -i musicgen_cuda121_models_all.tar
+docker load -i seed-voice-conversion-cuda126-fastapi.tar
 
 # 构建musicgen服务镜像5555
 缓存构建：docker build -f .\dockerfile-cuda126-fastapi -t seed-voice-conversion:cuda126-fastapi .

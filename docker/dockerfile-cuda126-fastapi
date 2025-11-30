@@ -30,9 +30,9 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # ================================================  工作  =========================================================
 RUN mkdir -p /workspace && git clone https://gitee.com/jasonchen955/SeedVoiceConversion.git /workspace/SeedVoiceConversion
-RUN pip install --no-cache-dir -r /workspace/docker/requirements.txt
+RUN pip install --no-cache-dir -r /workspace/SeedVoiceConversion/docker/requirements.txt
 
-# 切换到MusicGen目录
+# 切换到API目录
 WORKDIR /workspace/SeedVoiceConversion/api
 
 # 设置启动命令
