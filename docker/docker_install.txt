@@ -1,0 +1,10 @@
+# 导出基础镜像
+docker load -i musicgen_cuda121_models_all.tar
+
+# 构建musicgen服务镜像5555
+缓存构建：docker build -f .\dockerfile-cuda126-fastapi -t seed-voice-conversion:cuda126-fastapi .
+无缓存构建：docker build --no-cache -f .\dockerfile-cuda126-fastapi -t seed-voice-conversion:cuda126-fastapi .
+
+
+# 运行musicgen镜像 端口5555
+docker run -d --restart=unless-stopped --gpus all -p 5656:5656 SeedVoiceConversion:Cuda126-FastAPI

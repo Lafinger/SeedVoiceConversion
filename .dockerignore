@@ -1,0 +1,17 @@
+﻿.git
+.venv
+.idea
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.dll
+build
+dist
+log
+outputs
+audio-separator-models
+*.tar
+*.zip
+*.whl
