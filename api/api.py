@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from loguru_settings import TraceID, logger, setup_logging
 
+from music_utils import merge_accompaniment_and_vocals
 from voice_conversion_service import ConversionCancelled, VoiceConversionService
 
 voice_service = VoiceConversionService()
@@ -181,6 +182,50 @@ async def voice_conversion_endpoint(
 
         logger.info("semaphore released after convert completion")
 
+
+@app.post(
+    "/api/v1/mix-accompaniment",
+    summary="合并伴奏和人声",
+    response_class=FileResponse,
+)
+async def mix_accompaniment_and_vocals(
+    accompaniment_audio: UploadFile = File(..., description="伴奏音频文件"),
+    vocal_audio: UploadFile = File(..., description="人声音频文件"),
+    accompaniment_gain_db: Annotated[
+        float, Form(description="伴奏增益（dB）", ge=-30.0, le=30.0)
+    ] = 0.0,
+    vocal_gain_db: Annotated[float, Form(description="人声增益（dB）", ge=-30.0, le=30.0)] = 0.0,
+) -> FileResponse:
+    """
+    接收伴奏与人声两条音轨，做基础混音后返回合成的 wav 文件。
+    """
+    accompaniment_path = await _temp_save_upload_file(accompaniment_audio)
+    vocal_path = await _temp_save_upload_file(vocal_audio)
+
+    try:
+        output_path = await anyio.to_thread.run_sync(
+            lambda: merge_accompaniment_and_vocals(
+                accompaniment_path=accompaniment_path,
+                vocal_path=vocal_path,
+                accompaniment_gain_db=accompaniment_gain_db,
+                vocal_gain_db=vocal_gain_db,
+            ),
+            cancellable=False,
+        )
+        return FileResponse(
+            path=output_path,
+            media_type="audio/wav",
+            filename=output_path.name,
+        )
+    except Exception as e:
+        logger.error("mix accompaniment and vocals failed: %s", e)
+        raise HTTPException(status_code=500, detail="合并伴奏与人声失败")
+    finally:
+        for tmp in (accompaniment_path, vocal_path):
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception as cleanup_error:
+                logger.warning("清理临时文件失败 %s: %s", tmp, cleanup_error)
 
 @app.get("/api/v1/health", summary="健康检查")
 async def health_check():
