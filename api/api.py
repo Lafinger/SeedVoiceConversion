@@ -15,6 +15,9 @@ from loguru_settings import TraceID, logger, setup_logging
 from music_utils import merge_accompaniment_and_vocals
 from voice_conversion_service import ConversionCancelled, VoiceConversionService
 
+BASE_DIR = Path(__file__).resolve().parent
+UVICORN_LOG_CONFIG = BASE_DIR / "uvicorn_config.json"
+
 voice_service = VoiceConversionService()
 
 # 使用全局信号量进行限流检测
@@ -246,4 +249,10 @@ if __name__ == "__main__":
     args = parse_arguments()
 
     import uvicorn
-    uvicorn.run(app, host=args.host, port=args.port, log_config="uvicorn_config.json", log_level="info")
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_config=str(UVICORN_LOG_CONFIG),
+        log_level="info",
+    )
