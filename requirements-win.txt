@@ -34,4 +34,5 @@ uvicorn
 fastapi
 loguru
 
-# uv pip install -r requirements-win.txt --torch-backend cu126 --prerelease allow
+# python==3.10 
+# uv pip install -r requirements-win.txt --torch-backend cu128 --prerelease allow
