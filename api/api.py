@@ -99,7 +99,7 @@ async def voice_conversion_endpoint(
     request: Request,
     source_audio: UploadFile = File(..., description="待转换的源音频文件"),
     reference_audio: UploadFile = File(..., description="参考音色音频文件"),
-    diffusion_steps: Annotated[int, Form(description="扩散步数", ge=1, le=100)] = 10,
+    diffusion_steps: Annotated[int, Form(description="扩散步数", ge=1, le=1000)] = 50,
     length_adjust: Annotated[float, Form(description="输出长度调节系数", ge=0.5, le=2.0)] = 1.0,
     inference_cfg_rate: Annotated[
         float, Form(description="classifier-free guidance 系数", ge=0.0, le=5.0)
