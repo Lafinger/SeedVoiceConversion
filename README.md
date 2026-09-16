@@ -7,7 +7,7 @@ Seed Voice Conversion 的 FastAPI 推理服务，封装 Seed-VC 声音转换与�
 - FastAPI HTTP 服务，Swagger 文档 `/api/v1/docs`，健康检查 `/api/v1/health`
 - 伴奏与人声混音接口，支持分贝增益调节
 - 日志追踪（request id + loguru + uvicorn），推理结果自动保存到 `outputs/`
-- Hugging Face 模型自动下载并缓存到 `checkpoints/hf_cache`
+- Hugging Face 模型优先使用本地文件，缺失时自动下载到项目根目录的 `checkpoints/`
 
 ## 项目结构
 - `api/api.py`：FastAPI 入口，定义 HTTP 路由
@@ -99,9 +99,18 @@ curl -X POST "http://127.0.0.1:8000/api/v1/voice-conversion" ^
 ```
 
 ### 模型与缓存
-- 首次运行会自动从 Hugging Face 下载 Seed-VC、CampPlus、RMVPE、BigVGAN 等权重并缓存在 `checkpoints/hf_cache`。
-- 需要离线运行时，可提前下载完毕后保留该目录，代码已设置 `TRANSFORMERS_OFFLINE=1` 以优先走本地缓存。
+- 默认推理需要 Seed-VC、CAMPPlus、RMVPE、BigVGAN 和 Whisper。缓存固定在项目根目录的 `checkpoints/`，不随启动时的工作目录变化。
+- 程序先检查当前组件所需的配置、权重和分片文件；文件齐全时仅从本地加载，不联网检查更新，无需手动修改开关。缺少必要文件时才允许对应组件从 Hugging Face 下载并缓存。
+- 断网使用前需准备完整缓存。缓存采用 Hugging Face 的 `models--组织--模型/` 结构，复制已有缓存时应保留其中的 `refs`、`snapshots` 和 `blobs`（如有），不能只复制权重文件或只保留分片索引。
+- 文件损坏、配置不兼容或显存不足会报告原始错误，不自动重新下载或覆盖已有模型。缺缓存且下载失败时，日志会记录模型、缺失文件或组件及缓存目录。
+- 程序不再强制设置离线环境变量；如果启动环境显式设置了 `HF_HUB_OFFLINE=1` 或 `TRANSFORMERS_OFFLINE=1`，仍遵守离线限制，缺失文件时直接报错。
 - 输出 wav 默认写入 `outputs/`；日志写入 `log/`（loguru + uvicorn）。
+
+### 模型加载测试
+使用隔离的临时缓存和模拟下载验证本地优先、文件缺失与异常处理，不会下载真实模型：
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
 ## 打包为 Windows 可执行文件
 1. 安装 PyInstaller（使用虚拟环境执行）：

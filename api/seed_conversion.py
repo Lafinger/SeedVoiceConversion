@@ -1,5 +1,4 @@
-﻿import os
-import socket
+﻿import socket
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,19 +19,13 @@ from api.modules.hifigan.f0_predictor import ConvRNNF0Predictor
 from api.modules.hifigan.generator import HiFTGenerator
 from api.modules.rmvpe import RMVPE
 
-from api.hf_utils import load_custom_model_from_hf
+from api.hf_utils import load_custom_model_from_hf, load_pretrained_from_hf
 from api.common_exceptions import ConversionCancelled
 
 # 默认半精度推理，老显卡修改为: torch.float32
 dtype = torch.float16
 
 
-
-# 使用本地缓存模型
-IS_LOCAL_FILES_ONLY = False
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["HF_HUB_CACHE"] = "../checkpoints"
 
 # 以下为全局运行态缓存，初始化一次后供整个服务多次调用，避免重复加载
 device: torch.device = torch.device("cpu")
@@ -63,7 +56,7 @@ def load_models(args) -> Tuple:
     global sr, hop_length
     print(f"使用设备: {device}")
 
-    # 若用户未指定checkpoint，默认从HF下载官方模型；否则使用用户提供的路径
+    # 若用户未指定checkpoint，优先使用缓存的官方模型，缺失时下载；否则使用用户提供的路径
     if not args.checkpoint:
         dit_checkpoint_path, dit_config_path = load_custom_model_from_hf(
             "Plachta/Seed-VC",
@@ -114,7 +107,10 @@ def load_models(args) -> Tuple:
 
         # BigVGAN 直接载入官方提供的预训练权重
         bigvgan_name = model_params.vocoder.name
-        bigvgan_model = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=False, local_files_only=IS_LOCAL_FILES_ONLY)
+        bigvgan_model = load_pretrained_from_hf(
+            bigvgan.BigVGAN.from_pretrained, bigvgan_name,
+            required_files=("config.json", "bigvgan_generator.pt"), use_cuda_kernel=False,
+        )
         bigvgan_model.remove_weight_norm()
         bigvgan_model = bigvgan_model.eval().to(device)
         vocoder = bigvgan_model
@@ -157,9 +153,14 @@ def load_models(args) -> Tuple:
 
         whisper_name = model_params.speech_tokenizer.name
         # Whisper 仅需编码器部分，decoder可以释放内存
-        whisper_model = WhisperModel.from_pretrained(whisper_name, torch_dtype=dtype, local_files_only=IS_LOCAL_FILES_ONLY).to(device)
+        whisper_model = load_pretrained_from_hf(
+            WhisperModel.from_pretrained, whisper_name, check_weights=True, torch_dtype=dtype,
+        ).to(device)
         del whisper_model.decoder
-        whisper_feature_extractor = AutoFeatureExtractor.from_pretrained(whisper_name, local_files_only=IS_LOCAL_FILES_ONLY)
+        whisper_feature_extractor = load_pretrained_from_hf(
+            AutoFeatureExtractor.from_pretrained, whisper_name,
+            required_files=("preprocessor_config.json", "config.json"),
+        )
 
         def semantic_fn(waves_16k):
             # 统一提取16k音频的对数Mel特征，再送入Whisper编码器获取语义隐藏状态
@@ -187,8 +188,11 @@ def load_models(args) -> Tuple:
 
         hubert_model_name = model_params.speech_tokenizer.name
         # 华语数据常用CN-HuBERT，需配套的特征提取器
-        hubert_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(hubert_model_name, local_files_only=IS_LOCAL_FILES_ONLY)
-        hubert_model = HubertModel.from_pretrained(hubert_model_name, local_files_only=IS_LOCAL_FILES_ONLY)
+        hubert_feature_extractor = load_pretrained_from_hf(
+            Wav2Vec2FeatureExtractor.from_pretrained, hubert_model_name,
+            required_files=("preprocessor_config.json",),
+        )
+        hubert_model = load_pretrained_from_hf(HubertModel.from_pretrained, hubert_model_name, check_weights=True)
         hubert_model = hubert_model.to(device)
         hubert_model = hubert_model.eval()
         hubert_model = hubert_model.half()
@@ -215,8 +219,11 @@ def load_models(args) -> Tuple:
         model_name = model_params.speech_tokenizer.name
         output_layer = model_params.speech_tokenizer.output_layer
         # XLSR 使用多语言wav2vec2模型，可根据配置裁剪编码层
-        wav2vec_feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(model_name, local_files_only=IS_LOCAL_FILES_ONLY)
-        wav2vec_model = Wav2Vec2Model.from_pretrained(model_name, local_files_only=IS_LOCAL_FILES_ONLY)
+        wav2vec_feature_extractor = load_pretrained_from_hf(
+            Wav2Vec2FeatureExtractor.from_pretrained, model_name,
+            required_files=("preprocessor_config.json",),
+        )
+        wav2vec_model = load_pretrained_from_hf(Wav2Vec2Model.from_pretrained, model_name, check_weights=True)
         wav2vec_model.encoder.layers = wav2vec_model.encoder.layers[:output_layer]
         wav2vec_model = wav2vec_model.to(device)
         wav2vec_model = wav2vec_model.eval()
